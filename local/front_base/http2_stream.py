@@ -309,8 +309,8 @@ class Stream(object):
 
     def send_response(self):
         if self.task.responsed:
-            self.logger.error("http2_stream send_response but responsed.%s", self.task.url)
-            self.close("h2 stream send_response but sended.")
+            #self.logger.error("http2_stream send_response but responsed.%s", self.task.url)
+            self.close("")
             return
 
         self.task.responsed = True
