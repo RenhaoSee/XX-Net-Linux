@@ -1,4 +1,5 @@
-
+#!/usr/bin/env python
+# coding:utf-8
 import Queue
 import threading
 import socket
@@ -245,39 +246,26 @@ class Http2Worker(HttpWorker):
             if self.config.http2_show_debug:
                 self.logger.debug("%s Send:%s", self.ip, str(frame))
             data = frame.serialize()
-            try:
-                self._sock.send(data, flush=False)
-                # don't flush for small package
-                # reduce send api call
 
-                if self.send_queue._qsize():
-                    continue
+            self._sock.send(data, flush=False)
+            # don't flush for small package
+            # reduce send api call
 
-                # wait for payload frame
-                time.sleep(0.01)
-                # combine header and payload in one tcp package.
-                if not self.send_queue._qsize():
-                    self._sock.flush()
+            if self.send_queue._qsize():
+                continue
 
-                self.last_send_time = time.time()
-            except socket.error as e:
-                if e.errno not in (errno.EPIPE, errno.ECONNRESET):
-                    self.logger.warn("%s http2 send fail:%r", self.ip, e)
-                else:
-                    self.logger.exception("send error:%r", e)
+            # wait for payload frame
+            time.sleep(0.01)
+            # combine header and payload in one tcp package.
+            if not self.send_queue._qsize():
+                self._sock.flush()
 
-                self.close("send fail:%r" % e)
-            except Exception as e:
-                self.logger.debug("http2 %s send error:%r", self.ip, e)
-                self.close("send fail:%r" % e)
+            self.last_send_time = time.time()
 
     def recv_loop(self):
         while self.keep_running:
-            try:
-                self._consume_single_frame()
-            except Exception as e:
-                self.logger.exception("recv fail:%r", e)
-                self.close("recv fail:%r" % e)
+            self._consume_single_frame()
+
 
     def get_rtt_rate(self):
         return self.rtt + len(self.streams) * 3000
