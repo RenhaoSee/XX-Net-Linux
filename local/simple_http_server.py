@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+# coding:utf-8
 import os
 import urlparse
 import datetime
@@ -8,7 +10,6 @@ import errno
 import sys
 import select
 import time
-import json
 import base64
 import hashlib
 import struct
@@ -18,19 +19,6 @@ from logger import logger
 
 class GetReqTimeout(Exception):
     pass
-
-
-class ParseReqFail(Exception):
-    def __init__(self, message):
-        self.message = message
-
-    def __str__(self):
-        # for %s
-        return repr(self.message)
-
-    def __repr__(self):
-        # for %r
-        return repr(self.message)
 
 
 class HttpServerHandler():
@@ -195,199 +183,6 @@ class HttpServerHandler():
             self.logger.exception("handler:%r cmd:%s path:%s from:%s", e,  self.command, self.path, self.address_string())
             self.close_connection = 1
 
-    def WebSocket_handshake(self):
-        protocol = self.headers.get("Sec-WebSocket-Protocol", "")
-        if protocol:
-            self.logger.info("Sec-WebSocket-Protocol:%s", protocol)
-        version = self.headers.get("Sec-WebSocket-Version", "")
-        if version != "13":
-            self.logger.warn("Sec-WebSocket-Version:%s", version)
-            self.close_connection = 1
-            return False
-
-        key = self.headers["Sec-WebSocket-Key"]
-        self.WebSocket_key = key
-        digest = base64.b64encode(hashlib.sha1(key + self.WebSocket_MAGIC_GUID).hexdigest().decode('hex'))
-        response = 'HTTP/1.1 101 Switching Protocols\r\n'
-        response += 'Upgrade: websocket\r\n'
-        response += 'Connection: Upgrade\r\n'
-        response += 'Sec-WebSocket-Accept: %s\r\n\r\n' % digest
-        self.wfile.write(response)
-        return True
-
-    def WebSocket_send_message(self, message):
-        self.wfile.write(chr(129))
-        length = len(message)
-        if length <= 125:
-            self.wfile.write(chr(length))
-        elif length >= 126 and length <= 65535:
-            self.wfile.write(126)
-            self.wfile.write(struct.pack(">H", length))
-        else:
-            self.wfile.write(127)
-            self.wfile.write(struct.pack(">Q", length))
-        self.wfile.write(message)
-
-    def WebSocket_receive_worker(self):
-        while not self.close_connection:
-            try:
-                h = self.rfile.read(2)
-                if h is None or len(h) == 0:
-
-                    break
-
-                length = ord(h[1]) & 127
-                if length == 126:
-                    length = struct.unpack(">H", self.rfile.read(2))[0]
-                elif length == 127:
-                    length = struct.unpack(">Q", self.rfile.read(8))[0]
-                masks = [ord(byte) for byte in self.rfile.read(4)]
-                decoded = ""
-                for char in self.rfile.read(length):
-                    decoded += chr(ord(char) ^ masks[len(decoded) % 4])
-                try:
-                    self.WebSocket_on_message(decoded)
-                except Exception as e:
-                    self.logger.warn("WebSocket %s except on process message, %r", self.WebSocket_key, e)
-            except Exception as e:
-                self.logger.exception("WebSocket %s exception:%r", self.WebSocket_key, e)
-                break
-
-        self.WebSocket_on_close()
-        self.close_connection = 1
-
-    def WebSocket_on_message(self, message):
-        self.logger.debug("websocket message:%s", message)
-
-    def WebSocket_on_close(self):
-        self.logger.debug("websocket closed")
-
-    def do_WebSocket(self):
-        self.logger.info("WebSocket cmd:%s path:%s from:%s", self.command, self.path, self.address_string())
-        self.logger.info("Host:%s", self.headers.get("Host", ""))
-
-        if not self.WebSocket_on_connect():
-            return
-
-        if not self.WebSocket_handshake():
-            self.logger.warn("WebSocket handshake fail.")
-            return
-
-        self.WebSocket_receive_worker()
-
-    def WebSocket_on_connect(self):
-        # Define the function and return True to accept
-        self.logger.warn("unhandled WebSocket from %s", self.address_string())
-        self.send_error(501, "Not supported")
-        self.close_connection = 1
-
-        return False
-
-    def do_GET(self):
-        self.logger.warn("unhandler cmd:%s from:%s", self.command, self.address_string())
-
-    def do_POST(self):
-        self.logger.warn("unhandler cmd:%s from:%s", self.command, self.address_string())
-
-    def do_PUT(self):
-        self.logger.warn("unhandler cmd:%s from:%s", self.command, self.address_string())
-
-    def do_DELETE(self):
-        self.logger.warn("unhandler cmd:%s from:%s", self.command, self.address_string())
-
-    def do_OPTIONS(self):
-        self.logger.warn("unhandler cmd:%s from:%s", self.command, self.address_string())
-
-    def do_HEAD(self):
-        self.logger.warn("unhandler cmd:%s from:%s", self.command, self.address_string())
-
-    def do_CONNECT(self):
-        self.logger.warn("unhandler cmd:%s from:%s", self.command, self.address_string())
-
-    def send_not_found(self):
-        self.close_connection = 1
-        self.wfile.write(b'HTTP/1.1 404\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n404 Not Found')
-
-    def send_error(self, code, message=None):
-        self.close_connection = 1
-        self.wfile.write('HTTP/1.1 %d\r\n' % code)
-        self.wfile.write('Connection: close\r\n\r\n')
-        if message:
-            self.wfile.write(message)
-
-    def send_response(self, mimetype="", content="", headers="", status=200):
-        data = []
-        data.append('HTTP/1.1 %d\r\n' % status)
-        if len(mimetype):
-            data.append('Content-Type: %s\r\n' % mimetype)
-
-        data.append('Content-Length: %s\r\n' % len(content))
-        if len(headers):
-            if isinstance(headers, dict):
-                for key in headers:
-                    data.append("%s: %s\r\n" % (key, headers[key]))
-            elif isinstance(headers, basestring):
-                data.append(headers)
-        data.append("\r\n")
-
-        if len(content) < 1024:
-            data.append(content)
-            data_str = "".join(data)
-            self.wfile.write(data_str)
-        else:
-            data_str = "".join(data)
-            self.wfile.write(data_str)
-            if len(content):
-                self.wfile.write(content)
-
-    def send_redirect(self, url, headers={}, content="", status=307, text="Temporary Redirect"):
-        headers["Location"] = url
-        data = []
-        data.append('HTTP/1.1 %d\r\n' % status)
-        data.append('Content-Length: %s\r\n' % len(content))
-
-        if len(headers):
-            if isinstance(headers, dict):
-                for key in headers:
-                    data.append("%s: %s\r\n" % (key, headers[key]))
-            elif isinstance(headers, basestring):
-                data.append(headers)
-        data.append("\r\n")
-
-        data.append(content)
-        data_str = "".join(data)
-        self.wfile.write(data_str)
-
-    def send_response_nc(self, mimetype="", content="", headers="", status=200):
-        no_cache_headers = "Cache-Control: no-cache, no-store, must-revalidate\r\nPragma: no-cache\r\nExpires: 0\r\n"
-        return self.send_response(mimetype, content, no_cache_headers + headers, status)
-
-    def send_file(self, filename, mimetype):
-        try:
-            if not os.path.isfile(filename):
-                self.send_not_found()
-                return
-
-            file_size = os.path.getsize(filename)
-            tme = (datetime.datetime.today()+datetime.timedelta(minutes=330)).strftime('%a, %d %b %Y %H:%M:%S GMT')
-            head = 'HTTP/1.1 200\r\nAccess-Control-Allow-Origin: *\r\nCache-Control:public, max-age=31536000\r\n'
-            head += 'Expires: %s\r\nContent-Type: %s\r\nContent-Length: %s\r\n\r\n' % (tme, mimetype, file_size)
-            self.wfile.write(head.encode())
-
-            with open(filename, 'rb') as fp:
-                while True:
-                    data = fp.read(65535)
-                    if not data:
-                        break
-                    self.wfile.write(data)
-        except:
-            pass
-            #self.logger.warn("download broken")
-
-    def response_json(self, res_arr):
-        data = json.dumps(res_arr, indent=0, sort_keys=True)
-        self.send_response('application/json', data)
-
 
 class HTTPServer():
     def __init__(self, address, handler, args=(), use_https=False, cert="", logger=logger):
@@ -404,13 +199,7 @@ class HTTPServer():
         self.use_https = use_https
         self.cert = cert
         self.init_socket()
-        #self.logger.info("server %s:%d started.", address[0], address[1])
-
-    def start(self):
-        self.http_thread = threading.Thread(target=self.serve_forever)
-        self.http_thread.setDaemon(True)
-        self.http_thread.start()
-
+        
     def init_socket(self):
         server_address = set(self.server_address)
         ips = [ip for ip, _ in server_address]
@@ -546,87 +335,3 @@ class HTTPServer():
         for sock in self.sockets:
             sock.close()
         self.sockets = []
-
-
-class TestHttpServer(HttpServerHandler):
-    def __init__(self, sock, client, args):
-        self.data_path = args
-        HttpServerHandler.__init__(self, sock, client, args)
-
-    def generate_random_lowercase(self, n):
-        min_lc = ord(b'a')
-        len_lc = 26
-        ba = bytearray(os.urandom(n))
-        for i, b in enumerate(ba):
-            ba[i] = min_lc + b % len_lc # convert 0..255 to 97..122
-        #sys.stdout.buffer.write(ba)
-        return ba
-
-    def WebSocket_on_connect(self):
-        return True
-
-    def WebSocket_on_message(self, message):
-        self.WebSocket_send_message(message)
-
-    def do_GET(self):
-        url_path = urlparse.urlparse(self.path).path
-        req = urlparse.urlparse(self.path).query
-        reqs = urlparse.parse_qs(req, keep_blank_values=True)
-
-        self.logger.debug("GET %s from %s:%d", self.path, self.client_address[0], self.client_address[1])
-
-        if url_path == "/test":
-            tme = (datetime.datetime.today() + datetime.timedelta(minutes=330)).strftime('%a, %d %b %Y %H:%M:%S GMT')
-            head = 'HTTP/1.1 200\r\nAccess-Control-Allow-Origin: *\r\nCache-Control:public, max-age=31536000\r\n'
-            head += 'Expires: %s\r\nContent-Type: text/plain\r\nContent-Length: 4\r\n\r\nOK\r\n' % (tme)
-            self.wfile.write(head.encode())
-
-        elif url_path == '/':
-            data = "OK\r\n"
-            self.wfile.write('HTTP/1.1 200\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: %d\r\n\r\n%s' %(len(data), data) )
-        elif url_path == '/null':
-            mimetype = "application/x-binary"
-            if "size" in reqs:
-                file_size = int(reqs['size'][0])
-            else:
-                file_size = 1024 * 1024 * 1024
-
-            self.wfile.write('HTTP/1.1 200\r\nContent-Type: %s\r\nContent-Length: %s\r\n\r\n' % (mimetype, file_size))
-            start = 0
-            data = self.generate_random_lowercase(65535)
-            while start < file_size:
-                left = file_size - start
-                send_batch = min(left, 65535)
-                self.wfile.write(data[:send_batch])
-                start += send_batch
-        else:
-            target = os.path.abspath(os.path.join(self.data_path, url_path[1:]))
-            if os.path.isfile(target):
-                self.send_file(target, "application/x-binary")
-            else:
-                self.wfile.write('HTTP/1.1 404\r\nContent-Length: 0\r\n\r\n' )
-
-
-def main(data_path="."):
-    logging.info("listen http on 8880")
-    httpd = HTTPServer(('', 8880), TestHttpServer, data_path)
-    httpd.start()
-
-    while True:
-        time.sleep(10)
-
-
-if __name__ == "__main__":
-    if len(sys.argv) > 2:
-        data_path = sys.argv[1]
-    else:
-        data_path = "."
-
-    try:
-        main(data_path=data_path)
-    except Exception:
-        import traceback
-        traceback.print_exc(file=sys.stdout)
-    except KeyboardInterrupt:
-        sys.exit()
-
