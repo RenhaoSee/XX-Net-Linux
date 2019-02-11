@@ -20,9 +20,12 @@ Usage:
 
 Note: all XX-Net 3.13.1 related Python 2.7.15+ libs are latest version and installed by pip2.
 
-    pip2 install setuptools
-    pip2 install hyper ipaddress  pyOpenSSL hyperframe pyasn1 PySocks -U
-
+    pip2 install hyper hyperframe ipaddress pyasn1 pyOpenSSL PySocks setuptools -U
+    
+    # pip2 list
+    
+    Package      Version
+    ------------ -------
     asn1crypto   0.24.0 
     cffi         1.11.5 
     cryptography 2.5    
