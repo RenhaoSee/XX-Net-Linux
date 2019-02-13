@@ -432,9 +432,9 @@ class Http2Worker(HttpWorker):
 
         # Work out to whom this frame should go.
         if frame.stream_id != 0:
-            stream = self.streams[frame.stream_id]
-            stream.receive_frame(frame)
-
+            if frame.stream_id in self.streams:
+                stream = self.streams[frame.stream_id]
+                stream.receive_frame(frame) 
         else:
             self.receive_frame(frame)
 
